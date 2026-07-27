@@ -1,7 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
+import nodemailer from 'nodemailer';
 
-// Supabase Server Admin Client Setup
+// Supabase Client Setup
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -17,23 +18,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 🗓️ DATE RANGE CALCULATOR
     if (type === 'daily') {
-      // Yesterday 00:00 to Yesterday 23:59
       const yesterday = new Date(today);
       yesterday.setDate(today.getDate() - 1);
       startDateStr = yesterday.toISOString().split('T')[0];
       endDateStr = startDateStr;
       reportTitle = `Daily Executive Summary (${startDateStr})`;
-    } 
-    else if (type === 'weekly') {
-      // Last Sunday to Today (Saturday)
+    } else if (type === 'weekly') {
       const lastSunday = new Date(today);
       lastSunday.setDate(today.getDate() - 6);
       startDateStr = lastSunday.toISOString().split('T')[0];
       endDateStr = today.toISOString().split('T')[0];
       reportTitle = `Weekly Executive Performance Report (${startDateStr} to ${endDateStr})`;
-    } 
-    else if (type === 'monthly') {
-      // 1st of Previous Month to Last Day of Previous Month
+    } else if (type === 'monthly') {
       const firstDayPrevMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
       const lastDayPrevMonth = new Date(today.getFullYear(), today.getMonth(), 0);
       startDateStr = firstDayPrevMonth.toISOString().split('T')[0];
@@ -41,14 +37,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       reportTitle = `Monthly Executive Report (${firstDayPrevMonth.toLocaleString('default', { month: 'long', year: 'numeric' })})`;
     }
 
-    // 1. Fetch Leads in Date Range
+    // 1. Fetch Leads
     const { data: leads } = await supabase
       .from('leads')
       .select('*')
       .gte('date_added', startDateStr)
       .lte('date_added', endDateStr);
 
-    // 2. Fetch Spend Logs in Date Range
+    // 2. Fetch Spend Logs
     const { data: spendLogs } = await supabase
       .from('daily_spend_logs')
       .select('*')
@@ -61,7 +57,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 📊 CALCULATE METRICS
     const totalLeads = allLeads.length;
     const totalWon = allLeads.filter(l => l.status === 'Closed Won').length;
-    const totalLost = allLeads.filter(l => l.status === 'Closed Lost').length;
     const totalSpend = allSpend.reduce((acc, curr) => acc + Number(curr.spend_amount || 0), 0);
     const avgCPL = totalLeads > 0 ? (totalSpend / totalLeads).toFixed(2) : '0.00';
 
@@ -89,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (count > maxAgentWon) { maxAgentWon = count; bestAgent = name; }
     });
 
-    // ✉️ HTML EMAIL TEMPLATE GENERATION
+    // ✉️ HTML EMAIL TEMPLATE
     const htmlEmail = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; background: #ffffff;">
         <h2 style="color: #0f172a; margin-top: 0;">📢 Flowbee CRM - ${reportTitle}</h2>
@@ -128,22 +123,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       </div>
     `;
 
-    // 📩 MULTIPLE RECIPIENT EMAILS LIST
-    const recipientEmails = 'vertexsolutionsptb@gmail.com, rafeekfazili@gmail.com, salesgbc2026@gmail.com, crm@flowbee.io';
-
-    // Send Email to Executive Recipients
-    const emailRes = await fetch(`${req.headers.origin || 'https://' + req.headers.host}/api/send-email`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        eventType: 'EXECUTIVE_REPORT',
-        agentEmail: recipientEmails,
-        subject: `📊 Executive Summary: ${reportTitle}`,
-        html: htmlEmail
-      })
+    // 🚀 DIRECT NODEMAILER DISPATCH (NO FETCH INTERNALS)
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'server242.web-hosting.com',
+      port: Number(process.env.SMTP_PORT) || 465,
+      secure: true,
+      auth: {
+        user: process.env.SMTP_USER || 'crm@flowbee.io',
+        pass: process.env.SMTP_PASS,
+      },
     });
 
-    return res.status(200).json({ success: true, message: `${type} Executive report dispatched to all recipients!` });
+    const recipientList = [
+      'vertexsolutionsptb@gmail.com',
+      'rafeekfazili@gmail.com',
+      'salesgbc2026@gmail.com',
+      'crm@flowbee.io'
+    ];
+
+    await transporter.sendMail({
+      from: '"Flowbee CRM" <crm@flowbee.io>',
+      to: recipientList.join(', '),
+      subject: `📊 Executive Summary: ${reportTitle}`,
+      html: htmlEmail,
+    });
+
+    return res.status(200).json({ success: true, message: `Report dispatched directly to ${recipientList.length} emails!` });
 
   } catch (error: any) {
     console.error('Cron Execution Error:', error);
