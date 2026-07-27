@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from './supabaseClient';
 import type { Lead, DailySpendLog, SalesRep, PlatformName } from './types';
 import { ChartsDashboard } from './components/ChartsDashboard';
@@ -35,10 +35,10 @@ import {
   KeyRound,
   Trophy,
   Flame,
-  TrendingUp
+  TrendingUp,
+  Megaphone,
+  Layers
 } from 'lucide-react';
-
-declare const Email: any; // Direct Browser SmtpJS Access
 
 const PLATFORMS: PlatformName[] = [
   'Meta (FB/IG)',
@@ -127,7 +127,7 @@ const getLeadFollowupBadge = (leadActs: Activity[]) => {
 };
 
 export default function App() {
-  // 🔒 AUTHENTICATION STATES WITH LOCAL STORAGE REFRESH PERSISTENCE
+  // 🔒 AUTHENTICATION STATES
   const [currentUser, setCurrentUser] = useState<SalesRep | null>(() => {
     const savedUser = localStorage.getItem('crm_user');
     return savedUser ? JSON.parse(savedUser) : null;
@@ -138,7 +138,7 @@ export default function App() {
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
 
-  // 🔗 TAB ROUTING STATE (URL SYNC e.g., /#/spend)
+  // 🔗 TAB ROUTING STATE
   const getTabFromHash = (): 'dashboard' | 'leads' | 'followups' | 'spend' | 'agents' | 'reports' => {
     const hash = window.location.hash.replace('#/', '');
     if (['dashboard', 'leads', 'followups', 'spend', 'agents', 'reports'].includes(hash)) {
@@ -149,7 +149,6 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<'dashboard' | 'leads' | 'followups' | 'spend' | 'agents' | 'reports'>(getTabFromHash);
 
-  // Sync tab with Browser Hash URL
   const changeTab = (tab: 'dashboard' | 'leads' | 'followups' | 'spend' | 'agents' | 'reports') => {
     setActiveTab(tab);
     window.location.hash = `/${tab}`;
@@ -177,29 +176,29 @@ export default function App() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Today Date String
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // DASHBOARD DATE FILTER (DEFAULT: CURRENT MONTH)
+  // DASHBOARD DATE FILTER
   const [dashFromDate, setDashFromDate] = useState<string>(getCurrentMonthFirstDate());
   const [dashToDate, setDashToDate] = useState<string>(getCurrentMonthLastDate());
 
-  // Leads Filters State (🌟 Support for UNASSIGNED filter)
+  // Leads Filters State
   const [filterPlatform, setFilterPlatform] = useState<string>('ALL');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
-  const [filterAgentId, setFilterAgentId] = useState<string>('ALL'); // ALL, UNASSIGNED, or agent_id
+  const [filterAgentId, setFilterAgentId] = useState<string>('ALL');
+  const [filterCampaign, setFilterCampaign] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [leadFromDate, setLeadFromDate] = useState<string>('');
   const [leadToDate, setLeadToDate] = useState<string>('');
 
-  // Follow-ups Filters (Default: Current Month)
+  // Follow-ups Filters
   const [followupFromDate, setFollowupFromDate] = useState<string>(getCurrentMonthFirstDate());
   const [followupToDate, setFollowupToDate] = useState<string>(getCurrentMonthLastDate());
   const [followupTypeFilter, setFollowupTypeFilter] = useState<string>('ALL');
   const [followupStatusFilter, setFollowupStatusFilter] = useState<string>('ALL');
   const [followupAgentFilter, setFollowupAgentFilter] = useState<string>('ALL');
 
-  // Daily Spend Filters State (Default: Current Month)
+  // Daily Spend Filters State
   const [spendFromDate, setSpendFromDate] = useState<string>(getCurrentMonthFirstDate());
   const [spendToDate, setSpendToDate] = useState<string>(getCurrentMonthLastDate());
   const [spendPlatformFilter, setSpendPlatformFilter] = useState<string>('ALL');
@@ -224,6 +223,8 @@ export default function App() {
   const [leadAgentId, setLeadAgentId] = useState('');
   const [leadRemark, setLeadRemark] = useState('');
   const [leadCustomDate, setLeadCustomDate] = useState(todayStr);
+  const [leadCampaignName, setLeadCampaignName] = useState('');
+  const [leadAdSet, setLeadAdSet] = useState('');
 
   const [spendDate, setSpendDate] = useState(todayStr);
   const [spendPlatform, setSpendPlatform] = useState<PlatformName>('Meta (FB/IG)');
@@ -243,35 +244,50 @@ export default function App() {
   // Completion Form
   const [completionNotes, setCompletionNotes] = useState('');
 
-  // ✉️ DIRECT UNLIMITED HOSTING SMTP DISPATCH (ZERO SUPABASE EDGE FUNCTION DEPENDENCY)
-// ✉️ DIRECT UNLIMITED HOSTING SMTP DISPATCH
-const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAILY_REPORT' | 'STATUS_CHANGE', payload: any) => {
-  try {
-    const response = await fetch('/api/send-email', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        eventType,
-        leadName: payload.leadName || 'N/A',
-        leadPhone: payload.leadPhone || payload.phone || 'N/A',
-        assignedTo: payload.assignedTo || payload.repName || 'Sales Agent',
-        agentEmail: payload.agentEmail || 'crm@flowbee.io',
-        status: payload.status,
-      }),
-    });
+  // 🎯 DYNAMIC AUTOCOMPLETE MEMO FOR CAMPAIGNS & ADSETS
+  const existingCampaigns = useMemo(() => {
+    const list = leads
+      .map(l => l.campaignName)
+      .filter((c): c is string => Boolean(c && c.trim() !== ''));
+    return Array.from(new Set(list));
+  }, [leads]);
 
-    const result = await response.json();
-    if (result.success) {
-      console.log(`✅ Email sent via API!`);
-    } else {
-      console.error('❌ Email failed:', result.error);
+  const existingAdSets = useMemo(() => {
+    const list = leads
+      .map(l => l.adSet)
+      .filter((a): a is string => Boolean(a && a.trim() !== ''));
+    return Array.from(new Set(list));
+  }, [leads]);
+
+  // ✉️ DIRECT UNLIMITED HOSTING SMTP DISPATCH
+  const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAILY_REPORT' | 'STATUS_CHANGE', payload: any) => {
+    try {
+      const response = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          eventType,
+          leadName: payload.leadName || 'N/A',
+          leadPhone: payload.leadPhone || payload.phone || 'N/A',
+          assignedTo: payload.assignedTo || payload.repName || 'Sales Agent',
+          agentEmail: payload.agentEmail || 'crm@flowbee.io',
+          status: payload.status,
+          campaignName: payload.campaignName,
+        }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        console.log(`✅ Email sent via API!`);
+      } else {
+        console.error('❌ Email failed:', result.error);
+      }
+    } catch (err) {
+      console.error('❌ Network error:', err);
     }
-  } catch (err) {
-    console.error('❌ Network error:', err);
-  }
-};
+  };
 
   // ⏰ 8:00 PM DAILY REPORT SCHEDULER
   useEffect(() => {
@@ -287,17 +303,11 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
       }
     };
 
-
-
-
-
-    
-
     const interval = setInterval(checkScheduledReport, 60000);
     return () => clearInterval(interval);
   }, [leads, spendLogs, currentUser]);
 
-  // 🔐 HANDLE LOGIN (Save User to localStorage)
+  // 🔐 HANDLE LOGIN
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -314,7 +324,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
       alert('🔴 Your account is inactive. Please contact Administrator.');
     } else {
       setCurrentUser(data);
-      localStorage.setItem('crm_user', JSON.stringify(data)); // Persistent Session
+      localStorage.setItem('crm_user', JSON.stringify(data));
       alert(`👋 Welcome back, ${data.name}!`);
     }
     setLoading(false);
@@ -371,7 +381,9 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
           assignedSalesName: l.assigned_sales_name,
           status: l.status,
           dateAdded: l.date_added,
-          remark: l.remark
+          remark: l.remark,
+          campaignName: l.campaign_name || l.campaignName || '',
+          adSet: l.ad_set || l.adSet || ''
         })));
       }
 
@@ -397,7 +409,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
     }
   };
 
-  // ⚡ REALTIME WEBSOCKET SUBSCRIPTION (LIVE SOCKET)
+  // ⚡ REALTIME WEBSOCKET SUBSCRIPTION
   useEffect(() => {
     if (currentUser) {
       fetchData();
@@ -523,7 +535,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
     }
   };
 
-  // Reassign Lead (With Direct Hosting SMTP Email Notification)
+  // Reassign Lead
   const handleReassignLead = async (leadId: string, newAgentId: string) => {
     const selectedAgent = salesReps.find(r => r.id === newAgentId);
     const agentName = selectedAgent ? selectedAgent.name : 'Unassigned';
@@ -537,12 +549,12 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
     if (!error) {
       alert(`🔄 Lead Reassigned to ${agentName} successfully!`);
       
-      // ✉️ ASSIGN NOTIFICATION TRIGGER
       sendEmailNotification('ASSIGN', {
         leadName: targetLead?.customerName,
         leadPhone: targetLead?.phone,
         assignedTo: agentName,
-        agentEmail: selectedAgent?.email || 'crm@flowbee.io'
+        agentEmail: selectedAgent?.email || 'crm@flowbee.io',
+        campaignName: targetLead?.campaignName
       });
 
       fetchData();
@@ -570,7 +582,9 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
       email: editingLead.email,
       platform: editingLead.platform,
       remark: editingLead.remark,
-      date_added: editingLead.dateAdded
+      date_added: editingLead.dateAdded,
+      campaign_name: editingLead.campaignName || null,
+      ad_set: editingLead.adSet || null
     }).eq('id', editingLead.id);
 
     if (!error) {
@@ -592,7 +606,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
     return sortedReps[0];
   };
 
-  // Save Lead (With Direct Hosting SMTP Email Notification)
+  // Save Lead
   const handleSaveLead = async (shouldAssignRoundRobin = false) => {
     if (!leadName || !leadPhone) return;
 
@@ -612,7 +626,9 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
       assigned_sales_name: assignedRep ? assignedRep.name : 'Unassigned',
       status: 'New',
       date_added: leadCustomDate || todayStr,
-      remark: leadRemark
+      remark: leadRemark,
+      campaign_name: leadCampaignName || null,
+      ad_set: leadAdSet || null
     }]);
 
     if (!error) {
@@ -622,13 +638,16 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
           leadName,
           leadPhone,
           assignedTo: assignedRep.name,
-          agentEmail: assignedRep.email || 'crm@flowbee.io'
+          agentEmail: assignedRep.email || 'crm@flowbee.io',
+          campaignName: leadCampaignName
         });
       }
       setLeadName('');
       setLeadPhone('');
       setLeadEmail('');
       setLeadRemark('');
+      setLeadCampaignName('');
+      setLeadAdSet('');
       setLeadCustomDate(todayStr);
       setIsAddLeadModalOpen(false);
       fetchData();
@@ -649,22 +668,24 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
           leadName: lead?.customerName,
           repName: lead?.assignedSalesName,
           phone: lead?.phone,
-          agentEmail: agentObj?.email || 'crm@flowbee.io'
+          agentEmail: agentObj?.email || 'crm@flowbee.io',
+          campaignName: lead?.campaignName
         });
       } else if (newStatus === 'Closed Lost') {
         sendEmailNotification('LOST', {
           leadName: lead?.customerName,
           repName: lead?.assignedSalesName,
-          agentEmail: agentObj?.email || 'crm@flowbee.io'
+          agentEmail: agentObj?.email || 'crm@flowbee.io',
+          campaignName: lead?.campaignName
         });
       } else {
-        // ✉️ STATUS CHANGE TRIGGER
         sendEmailNotification('STATUS_CHANGE', {
           leadName: lead?.customerName,
           leadPhone: lead?.phone,
           repName: lead?.assignedSalesName,
           status: newStatus,
-          agentEmail: agentObj?.email || 'crm@flowbee.io'
+          agentEmail: agentObj?.email || 'crm@flowbee.io',
+          campaignName: lead?.campaignName
         });
       }
       fetchData();
@@ -775,7 +796,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
     }
   };
 
-  // 🔒 VISIBILITY FILTER (Sales Executive sees ONLY personal assigned data)
+  // 🔒 VISIBILITY FILTER
   const visibleLeads = leads.filter(l => {
     if (currentUser?.role === 'sales_executive') {
       return l.assignedSalesId === currentUser.id;
@@ -783,13 +804,13 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
     return true;
   });
 
-  // 🌟 LEADS PIPELINE FILTER LOGIC (Supports 'UNASSIGNED')
+  // 🌟 LEADS PIPELINE FILTER LOGIC (Supports CAMPAIGNS)
   const filteredLeads = visibleLeads.filter(l => {
     const matchesSearch = l.customerName.toLowerCase().includes(searchQuery.toLowerCase()) || l.phone.includes(searchQuery);
     const matchesPlatform = filterPlatform === 'ALL' || l.platform === filterPlatform;
     const matchesStatus = filterStatus === 'ALL' || l.status === filterStatus;
+    const matchesCampaign = filterCampaign === 'ALL' || l.campaignName === filterCampaign;
 
-    // UNASSIGNED Filter Handling
     let matchesAgent = true;
     if (filterAgentId === 'UNASSIGNED') {
       matchesAgent = !l.assignedSalesId;
@@ -800,7 +821,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
     const matchesFromDate = !leadFromDate || (l.dateAdded && l.dateAdded >= leadFromDate);
     const matchesToDate = !leadToDate || (l.dateAdded && l.dateAdded <= leadToDate);
 
-    return matchesSearch && matchesPlatform && matchesStatus && matchesAgent && matchesFromDate && matchesToDate;
+    return matchesSearch && matchesPlatform && matchesStatus && matchesAgent && matchesCampaign && matchesFromDate && matchesToDate;
   });
 
   const visibleActivities = activities.filter(a => {
@@ -829,6 +850,30 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
     return matchesFrom && matchesTo && matchesPlatform;
   });
 
+  // 🏆 CAMPAIGN & ADSET PERFORMANCE CALCULATOR FOR ANALYTICS
+  const campaignPerformance = useMemo(() => {
+    const stats: Record<string, { totalLeads: number; wonLeads: number; adSets: Record<string, { total: number; won: number }> }> = {};
+
+    leads.forEach(l => {
+      const camp = l.campaignName || 'Direct / Organic';
+      const adSet = l.adSet || 'Default AdSet';
+
+      if (!stats[camp]) {
+        stats[camp] = { totalLeads: 0, wonLeads: 0, adSets: {} };
+      }
+      stats[camp].totalLeads += 1;
+      if (l.status === 'Closed Won') stats[camp].wonLeads += 1;
+
+      if (!stats[camp].adSets[adSet]) {
+        stats[camp].adSets[adSet] = { total: 0, won: 0 };
+      }
+      stats[camp].adSets[adSet].total += 1;
+      if (l.status === 'Closed Won') stats[camp].adSets[adSet].won += 1;
+    });
+
+    return stats;
+  }, [leads]);
+
   // EXPORT EXCEL (CSV) FUNCTION
   const exportToExcel = () => {
     if (filteredLeads.length === 0) {
@@ -836,12 +881,14 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
       return;
     }
 
-    const headers = ["Customer Name", "Phone", "Email", "Platform", "Assigned Sales Rep", "Stage/Status", "Date Added", "Remark"];
+    const headers = ["Customer Name", "Phone", "Email", "Platform", "Campaign", "AdSet", "Assigned Sales Rep", "Stage/Status", "Date Added", "Remark"];
     const rows = filteredLeads.map(l => [
       `"${l.customerName}"`,
       `"${l.phone}"`,
       `"${l.email || 'N/A'}"`,
       `"${l.platform}"`,
+      `"${l.campaignName || 'N/A'}"`,
+      `"${l.adSet || 'N/A'}"`,
       `"${l.assignedSalesName || 'Unassigned'}"`,
       `"${l.status}"`,
       `"${l.dateAdded}"`,
@@ -871,12 +918,12 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
     doc.setFontSize(10);
     doc.text(`Generated on: ${new Date().toLocaleDateString()} | Total Leads: ${filteredLeads.length}`, 14, 22);
 
-    const tableColumn = ["Customer Name", "Phone", "Email", "Platform", "Sales Rep", "Stage", "Created"];
+    const tableColumn = ["Customer Name", "Phone", "Campaign", "AdSet", "Sales Rep", "Stage", "Created"];
     const tableRows = filteredLeads.map(l => [
       l.customerName,
       l.phone,
-      l.email || 'N/A',
-      l.platform,
+      l.campaignName || 'N/A',
+      l.adSet || 'N/A',
       l.assignedSalesName || 'Unassigned',
       l.status,
       l.dateAdded
@@ -1266,7 +1313,6 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
                 <div className="flex items-center space-x-2">
                   <h2 className="text-xl md:text-2xl font-bold text-slate-900">Leads Pipeline</h2>
 
-                  {/* 🌟 NUMBERS BADGE: FILTERED vs TOTAL LEADS */}
                   <div className="flex items-center space-x-1.5 bg-blue-50 text-blue-800 border border-blue-200 px-2.5 py-1 rounded-xl text-xs font-bold shadow-sm">
                     <span>Filtered: <strong className="text-blue-600 text-sm">{filteredLeads.length}</strong></span>
                     <span className="text-slate-300">/</span>
@@ -1291,7 +1337,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
               </div>
             </div>
 
-            {/* SEARCH & DETAILED FILTERS (WITH UNASSIGNED OPTION) */}
+            {/* SEARCH & DETAILED FILTERS */}
             <div className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
               <div className="flex items-center space-x-2 border rounded-xl px-3 py-2 bg-slate-50">
                 <Search size={16} className="text-slate-400 shrink-0" />
@@ -1304,14 +1350,19 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
                 />
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
                 {currentUser.role === 'admin' && (
-                  <select value={filterAgentId} onChange={e => setFilterAgentId(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50 outline-none font-semibold text-blue-700 col-span-2 md:col-span-1">
+                  <select value={filterAgentId} onChange={e => setFilterAgentId(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50 outline-none font-semibold text-blue-700">
                     <option value="ALL">👤 All Sales Execs</option>
-                    <option value="UNASSIGNED">⚠️ Unassigned Leads Only</option>
+                    <option value="UNASSIGNED">⚠️ Unassigned Leads</option>
                     {salesReps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 )}
+
+                <select value={filterCampaign} onChange={e => setFilterCampaign(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50 outline-none font-semibold text-purple-700">
+                  <option value="ALL">📢 All Campaigns</option>
+                  {existingCampaigns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
 
                 <select value={filterPlatform} onChange={e => setFilterPlatform(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50 outline-none">
                   <option value="ALL">All Platforms</option>
@@ -1357,9 +1408,16 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 border-b pb-3">
                       <div>
                         <div className="flex items-center justify-between sm:justify-start space-x-2">
-                          <div className="flex items-center space-x-2">
+                          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
                             <h3 className="font-bold text-slate-900 text-sm md:text-base">{l.customerName}</h3>
                             <span className="bg-slate-100 text-slate-600 text-[10px] px-2 py-0.5 rounded font-semibold">{l.platform}</span>
+
+                            {/* 📢 CAMPAIGN BADGE */}
+                            {l.campaignName && (
+                              <span className="bg-purple-100 text-purple-700 text-[10px] px-2 py-0.5 rounded font-bold border border-purple-200 flex items-center space-x-1">
+                                <Megaphone size={10} /> <span>{l.campaignName}</span>
+                              </span>
+                            )}
                           </div>
 
                           <div className="flex items-center space-x-1 ml-auto sm:ml-2">
@@ -1376,6 +1434,8 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
                           <p>Phone: <strong className="text-slate-700">{l.phone}</strong></p>
                           <span>•</span>
                           <p>Email: <strong className="text-slate-700">{l.email || 'N/A'}</strong></p>
+                          <span>•</span>
+                          <p>AdSet: <strong className="text-indigo-600 font-bold">{l.adSet || 'Default'}</strong></p>
                           <span>•</span>
                           <p>Created: <strong className="text-blue-600 font-bold">{l.dateAdded}</strong></p>
                           <span>•</span>
@@ -1851,16 +1911,70 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
           </div>
         )}
 
-        {/* REPORTS & ANALYTICS TAB */}
+        {/* 🏆 REPORTS & CAMPAIGN ANALYTICS TAB */}
         {activeTab === 'reports' && currentUser.role === 'admin' && (
-          <div className="space-y-4 md:space-y-6">
-            <h2 className="text-xl md:text-2xl font-bold text-slate-900">Reports & Executive Analytics</h2>
-            <ChartsDashboard
-              spendLogs={spendLogs}
-              leads={leads}
-              salesReps={salesReps}
-              activities={activities}
-            />
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900">Campaign & AdSet Analytics</h2>
+              <p className="text-xs text-slate-500">Track best performing marketing campaigns, ad sets, and conversion efficiency</p>
+            </div>
+
+            {/* CAMPAIGN METRICS BREAKDOWN GRID */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {Object.entries(campaignPerformance).map(([campaignName, data]) => {
+                const conversionRate = data.totalLeads > 0 ? ((data.wonLeads / data.totalLeads) * 100).toFixed(1) : '0';
+
+                return (
+                  <div key={campaignName} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                    <div className="flex items-center justify-between border-b pb-3">
+                      <div>
+                        <span className="text-[10px] font-bold text-purple-600 uppercase tracking-wider flex items-center space-x-1">
+                          <Megaphone size={12} /> <span>Campaign Name</span>
+                        </span>
+                        <h3 className="text-lg font-black text-slate-900">{campaignName}</h3>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase">Conversion Rate</span>
+                        <p className="text-lg font-black text-emerald-600">{conversionRate}%</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-slate-50 p-3 rounded-xl border">
+                        <p className="text-[10px] font-bold text-slate-500">Total Leads</p>
+                        <h4 className="text-xl font-bold text-blue-600">{data.totalLeads}</h4>
+                      </div>
+                      <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                        <p className="text-[10px] font-bold text-emerald-700">Closed Won Deals</p>
+                        <h4 className="text-xl font-bold text-emerald-700">{data.wonLeads}</h4>
+                      </div>
+                    </div>
+
+                    {/* ADSET BREAKDOWN */}
+                    <div className="space-y-2 pt-2 border-t">
+                      <h5 className="text-xs font-bold text-slate-700 flex items-center space-x-1">
+                        <Layers size={13} className="text-indigo-600" />
+                        <span>AdSet Breakdown</span>
+                      </h5>
+                      <div className="space-y-1.5">
+                        {Object.entries(data.adSets).map(([adSetName, adData]) => (
+                          <div key={adSetName} className="flex justify-between items-center text-xs bg-slate-50 p-2 rounded-lg border">
+                            <span className="font-semibold text-slate-700">{adSetName}</span>
+                            <div className="space-x-2">
+                              <span className="text-slate-500">Leads: <strong>{adData.total}</strong></span>
+                              <span className="text-emerald-600 font-bold">Won: {adData.won}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                  </div>
+                );
+              })}
+            </div>
+
+            <ChartsDashboard spendLogs={spendLogs} leads={leads} salesReps={salesReps} activities={activities} />
           </div>
         )}
 
@@ -2139,7 +2253,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
           </div>
         )}
 
-        {/* MODAL: ADD LEAD */}
+        {/* MODAL: ADD LEAD (WITH DATALIST FOR CAMPAIGN & ADSET) */}
         {isAddLeadModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-2xl p-5 max-w-md w-full space-y-4 shadow-xl">
@@ -2163,6 +2277,40 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
                 <input type="text" placeholder="Customer Name *" required value={leadName} onChange={e => setLeadName(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs md:text-sm outline-none" />
                 <input type="text" placeholder="Phone Number *" required value={leadPhone} onChange={e => setLeadPhone(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs md:text-sm outline-none" />
                 <input type="email" placeholder="Email Address" value={leadEmail} onChange={e => setLeadEmail(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs md:text-sm outline-none" />
+
+                {/* 🎯 CAMPAIGN & ADSET AUTOCOMPLETE SELECTION */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Campaign Name</label>
+                    <input
+                      type="text"
+                      list="add-campaign-suggestions"
+                      placeholder="Type or select..."
+                      value={leadCampaignName}
+                      onChange={e => setLeadCampaignName(e.target.value)}
+                      className="w-full border rounded-xl p-2 text-xs outline-none font-semibold text-purple-700"
+                    />
+                    <datalist id="add-campaign-suggestions">
+                      {existingCampaigns.map((c, i) => <option key={i} value={c} />)}
+                    </datalist>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Ad Set</label>
+                    <input
+                      type="text"
+                      list="add-adset-suggestions"
+                      placeholder="Type or select..."
+                      value={leadAdSet}
+                      onChange={e => setLeadAdSet(e.target.value)}
+                      className="w-full border rounded-xl p-2 text-xs outline-none font-semibold text-indigo-700"
+                    />
+                    <datalist id="add-adset-suggestions">
+                      {existingAdSets.map((a, i) => <option key={i} value={a} />)}
+                    </datalist>
+                  </div>
+                </div>
+
                 <select value={leadPlatform} onChange={e => setLeadPlatform(e.target.value as PlatformName)} className="w-full border rounded-xl p-2.5 text-xs md:text-sm outline-none">
                   {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
@@ -2226,6 +2374,38 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
                   <label className="block text-[11px] font-semibold text-slate-500 mb-1">Email Address</label>
                   <input type="email" value={editingLead.email || ''} onChange={e => setEditingLead({ ...editingLead, email: e.target.value })} className="w-full border rounded-xl p-2.5 text-xs md:text-sm outline-none" />
                 </div>
+
+                {/* EDIT CAMPAIGN & ADSET FIELDS */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Campaign Name</label>
+                    <input
+                      type="text"
+                      list="edit-campaign-suggestions"
+                      value={editingLead.campaignName || ''}
+                      onChange={e => setEditingLead({ ...editingLead, campaignName: e.target.value })}
+                      className="w-full border rounded-xl p-2 text-xs outline-none font-semibold text-purple-700"
+                    />
+                    <datalist id="edit-campaign-suggestions">
+                      {existingCampaigns.map((c, i) => <option key={i} value={c} />)}
+                    </datalist>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Ad Set</label>
+                    <input
+                      type="text"
+                      list="edit-adset-suggestions"
+                      value={editingLead.adSet || ''}
+                      onChange={e => setEditingLead({ ...editingLead, adSet: e.target.value })}
+                      className="w-full border rounded-xl p-2 text-xs outline-none font-semibold text-indigo-700"
+                    />
+                    <datalist id="edit-adset-suggestions">
+                      {existingAdSets.map((a, i) => <option key={i} value={a} />)}
+                    </datalist>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-500 mb-1">Platform</label>
                   <select value={editingLead.platform} onChange={e => setEditingLead({ ...editingLead, platform: e.target.value as PlatformName })} className="w-full border rounded-xl p-2.5 text-xs md:text-sm outline-none">
