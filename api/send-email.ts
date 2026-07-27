@@ -10,13 +10,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { eventType, leadName, leadPhone, assignedTo, agentEmail, status } = req.body;
 
+    // SMTP Credentials environment variables-il ninnum mathram load cheyya
     const transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'server242.web-hosting.com',
       port: Number(process.env.SMTP_PORT) || 465,
       secure: true,
       auth: {
-        user: process.env.SMTP_USER || 'crm@connectgbc.com',
-        pass: process.env.SMTP_PASS || 'Newpassword@123',
+        user: process.env.SMTP_USER, // Set in Vercel Env
+        pass: process.env.SMTP_PASS, // Set in Vercel Env
       },
     });
 
@@ -35,8 +36,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       </div>
     `;
 
+    // FIXED: From Address exact SMTP Authenticated user email (flowbee.io) tanne use cheyya
     await transporter.sendMail({
-      from: '"Flowbee CRM" <crm@connectgbc.com>',
+      from: '"Flowbee CRM" <crm@flowbee.io>', 
       to: recipient,
       subject: `🎯 Flowbee CRM: ${eventType} - ${leadName || 'Lead Alert'}`,
       html: htmlContent,
