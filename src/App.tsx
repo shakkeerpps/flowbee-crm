@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from './supabaseClient';
-import type { Lead, DailySpendLog, SalesRep, PlatformName } from './types';
+import type { Lead, DailySpendLog, SalesRep, PlatformName, Campaign, AdSet } from './types';
 import { ChartsDashboard } from './components/ChartsDashboard';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -21,7 +21,6 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
-  ShieldCheck,
   FileText,
   Download,
   FileSpreadsheet,
@@ -39,7 +38,9 @@ import {
   Megaphone,
   Layers,
   Award,
-  AlertTriangle
+  AlertTriangle,
+  FolderPlus,
+  Plus
 } from 'lucide-react';
 
 const PLATFORMS: PlatformName[] = [
@@ -140,18 +141,35 @@ export default function App() {
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
 
+  // Spend campaign state variables
+  const [spendCampaign, setSpendCampaign] = useState('');
+  const [spendCampaignSelect, setSpendCampaignSelect] = useState('ALL');
+
+  // Leads Dynamic AdSet Filter & Date Sorting States
+  const [filterAdSet, setFilterAdSet] = useState<string>('ALL');
+  const [sortDateOrder, setSortDateOrder] = useState<'desc' | 'asc'>('desc'); // 'desc' = Newest First, 'asc' = Oldest First
+
+  // Master Campaigns & AdSets States
+  const [campaignsList, setCampaignsList] = useState<Campaign[]>([]);
+  const [adSetsList, setAdSetsList] = useState<AdSet[]>([]);
+
+  // Selected Campaign for dynamic filtering in modals
+  const [selectedCampaignId, setSelectedCampaignId] = useState('');
+
   // 🔗 TAB ROUTING STATE
-  const getTabFromHash = (): 'dashboard' | 'leads' | 'followups' | 'spend' | 'agents' | 'reports' => {
+  type TabType = 'dashboard' | 'leads' | 'followups' | 'spend' | 'agents' | 'reports' | 'campaigns';
+
+  const getTabFromHash = (): TabType => {
     const hash = window.location.hash.replace('#/', '');
-    if (['dashboard', 'leads', 'followups', 'spend', 'agents', 'reports'].includes(hash)) {
-      return hash as any;
+    if (['dashboard', 'leads', 'followups', 'spend', 'agents', 'reports', 'campaigns'].includes(hash)) {
+      return hash as TabType;
     }
     return 'dashboard';
   };
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'leads' | 'followups' | 'spend' | 'agents' | 'reports'>(getTabFromHash);
+  const [activeTab, setActiveTab] = useState<TabType>(getTabFromHash);
 
-  const changeTab = (tab: 'dashboard' | 'leads' | 'followups' | 'spend' | 'agents' | 'reports') => {
+  const changeTab = (tab: TabType) => {
     setActiveTab(tab);
     window.location.hash = `/${tab}`;
     setIsMobileMenuOpen(false);
@@ -212,6 +230,17 @@ export default function App() {
   const [isAddLeadModalOpen, setIsAddLeadModalOpen] = useState(false);
   const [isAddSpendModalOpen, setIsAddSpendModalOpen] = useState(false);
   const [isAddAgentModalOpen, setIsAddAgentModalOpen] = useState(false);
+  const [isAddCampaignModalOpen, setIsAddCampaignModalOpen] = useState(false);
+  const [isAddAdSetModalOpen, setIsAddAdSetModalOpen] = useState(false);
+  const [selectedParentCampaignForAdSet, setSelectedParentCampaignForAdSet] = useState<Campaign | null>(null);
+
+  // Forms for Campaign & AdSet Master
+  const [newCampaignName, setNewCampaignName] = useState('');
+  const [newCampaignPlatform, setNewCampaignPlatform] = useState<PlatformName>('Meta (FB/IG)');
+  const [newMetaCampaignId, setNewMetaCampaignId] = useState('');
+
+  const [newAdSetName, setNewAdSetName] = useState('');
+  const [newMetaAdSetId, setNewMetaAdSetId] = useState('');
 
   // Follow-up & Edit Modals
   const [activeActivityLead, setActiveActivityLead] = useState<Lead | null>(null);
@@ -230,11 +259,14 @@ export default function App() {
   const [leadCustomDate, setLeadCustomDate] = useState(todayStr);
   const [leadCampaignName, setLeadCampaignName] = useState('');
   const [leadAdSet, setLeadAdSet] = useState('');
+  const [leadCampaignId, setLeadCampaignId] = useState('');
+  const [leadAdSetId, setLeadAdSetId] = useState('');
 
   const [spendDate, setSpendDate] = useState(todayStr);
   const [spendPlatform, setSpendPlatform] = useState<PlatformName>('Meta (FB/IG)');
   const [spendAmount, setSpendAmount] = useState('');
   const [spendClicks, setSpendClicks] = useState('');
+  const [spendCampaignId, setSpendCampaignId] = useState('');
 
   const [agentName, setAgentName] = useState('');
   const [agentEmail, setAgentEmail] = useState('');
@@ -263,6 +295,44 @@ export default function App() {
       .filter((a): a is string => Boolean(a && a.trim() !== ''));
     return Array.from(new Set(list));
   }, [leads]);
+
+  // Filter Scopes
+  const visibleLeads = leads.filter(l => currentUser?.role === 'sales_executive' ? l.assignedSalesId === currentUser.id : true);
+
+  // 🎯 Dynamic AdSet Filter Logic
+  const availableAdSetsForFilter = useMemo(() => {
+    if (filterCampaign === 'ALL') {
+      return existingAdSets;
+    }
+    const filtered = visibleLeads
+      .filter(l => l.campaignName === filterCampaign && l.adSet && l.adSet.trim() !== '')
+      .map(l => l.adSet!);
+    return Array.from(new Set(filtered));
+  }, [filterCampaign, visibleLeads, existingAdSets]);
+
+  // 🎯 Master Filtered & Sorted Leads Engine
+  const filteredLeads = useMemo(() => {
+    return visibleLeads.filter(l => {
+      const matchesSearch = l.customerName.toLowerCase().includes(searchQuery.toLowerCase()) || l.phone.includes(searchQuery);
+      const matchesPlatform = filterPlatform === 'ALL' || l.platform === filterPlatform;
+      const matchesStatus = filterStatus === 'ALL' || l.status === filterStatus;
+      const matchesCampaign = filterCampaign === 'ALL' || l.campaignName === filterCampaign;
+      const matchesAdSet = filterAdSet === 'ALL' || l.adSet === filterAdSet;
+
+      let matchesAgent = true;
+      if (filterAgentId === 'UNASSIGNED') matchesAgent = !l.assignedSalesId;
+      else if (filterAgentId !== 'ALL') matchesAgent = l.assignedSalesId === filterAgentId;
+
+      const matchesFromDate = !leadFromDate || (l.dateAdded && l.dateAdded >= leadFromDate);
+      const matchesToDate = !leadToDate || (l.dateAdded && l.dateAdded <= leadToDate);
+
+      return matchesSearch && matchesPlatform && matchesStatus && matchesAgent && matchesCampaign && matchesAdSet && matchesFromDate && matchesToDate;
+    }).sort((a, b) => {
+      const dateA = new Date(a.dateAdded || 0).getTime();
+      const dateB = new Date(b.dateAdded || 0).getTime();
+      return sortDateOrder === 'desc' ? dateB - dateA : dateA - dateB;
+    });
+  }, [visibleLeads, searchQuery, filterPlatform, filterStatus, filterCampaign, filterAdSet, filterAgentId, leadFromDate, leadToDate, sortDateOrder]);
 
   // ✉️ DIRECT UNLIMITED HOSTING SMTP DISPATCH
   const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAILY_REPORT' | 'STATUS_CHANGE', payload: any) => {
@@ -342,6 +412,7 @@ export default function App() {
           dateAdded: l.date_added,
           remark: l.remark,
           campaignName: l.campaign_name || l.campaignName || '',
+          campaignId: l.campaign_id || '',
           adSet: l.ad_set || l.adSet || ''
         })));
       }
@@ -352,9 +423,35 @@ export default function App() {
           id: s.id,
           date: s.date,
           platform: s.platform,
+          campaignName: s.campaign_name || s.campaignName || 'General / Multi-Campaign',
+          campaignId: s.campaign_id || '',
           spendAmount: Number(s.spend_amount),
           clicks: Number(s.clicks),
           cpc: Number(s.cpc)
+        })));
+      }
+
+      // Fetch Master Campaigns & AdSets
+      const { data: campaignsData } = await supabase.from('campaigns').select('*').order('created_at', { ascending: false });
+      const { data: adsetsData } = await supabase.from('adsets').select('*').order('created_at', { ascending: false });
+
+      if (campaignsData) {
+        setCampaignsList(campaignsData.map(c => ({
+          id: c.id,
+          name: c.name,
+          platform: c.platform,
+          metaCampaignId: c.meta_campaign_id,
+          status: c.status || 'ACTIVE'
+        })));
+      }
+
+      if (adsetsData) {
+        setAdSetsList(adsetsData.map(a => ({
+          id: a.id,
+          campaignId: a.campaign_id,
+          name: a.name,
+          metaAdSetId: a.meta_adset_id,
+          status: a.status || 'ACTIVE'
         })));
       }
 
@@ -379,6 +476,8 @@ export default function App() {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_spend_logs' }, () => fetchData())
         .on('postgres_changes', { event: '*', schema: 'public', table: 'lead_activities' }, () => fetchData())
         .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_reps' }, () => fetchData())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'campaigns' }, () => fetchData())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'adsets' }, () => fetchData())
         .subscribe();
 
       return () => {
@@ -387,7 +486,7 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // 📈 ADVANCED ANALYTICS CALCULATOR (BEST & WORST PERFORMANCE ENGINE)
+  // 📈 ADVANCED ANALYTICS CALCULATOR
   const analyticsEngine = useMemo(() => {
     const campaignStats: Record<string, { total: number; won: number; adSets: Record<string, { total: number; won: number }> }> = {};
     const adSetStats: Record<string, { campaign: string; total: number; won: number }> = {};
@@ -454,6 +553,62 @@ export default function App() {
     if (!currentUser || !newPassword) return;
     const { error } = await supabase.from('sales_reps').update({ password: newPassword }).eq('id', currentUser.id);
     if (!error) { alert('✅ Password changed successfully!'); setIsChangePasswordModalOpen(false); setNewPassword(''); }
+  };
+
+  // 📢 Campaign & AdSet Master Operations
+  const handleCreateCampaign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCampaignName) return;
+
+    const { error } = await supabase.from('campaigns').insert([{
+      name: newCampaignName,
+      platform: newCampaignPlatform,
+      meta_campaign_id: newMetaCampaignId || null,
+      status: 'ACTIVE'
+    }]);
+
+    if (!error) {
+      setNewCampaignName('');
+      setNewMetaCampaignId('');
+      setIsAddCampaignModalOpen(false);
+      fetchData();
+    } else {
+      alert(`Error creating campaign: ${error.message}`);
+    }
+  };
+
+  const handleCreateAdSet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedParentCampaignForAdSet || !newAdSetName) return;
+
+    const { error } = await supabase.from('adsets').insert([{
+      campaign_id: selectedParentCampaignForAdSet.id,
+      name: newAdSetName,
+      meta_adset_id: newMetaAdSetId || null,
+      status: 'ACTIVE'
+    }]);
+
+    if (!error) {
+      setNewAdSetName('');
+      setNewMetaAdSetId('');
+      setIsAddAdSetModalOpen(false);
+      setSelectedParentCampaignForAdSet(null);
+      fetchData();
+    } else {
+      alert(`Error creating AdSet: ${error.message}`);
+    }
+  };
+
+  const handleDeleteCampaign = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to delete Campaign "${name}" and all its AdSets?`)) return;
+    const { error } = await supabase.from('campaigns').delete().eq('id', id);
+    if (!error) fetchData();
+  };
+
+  const handleDeleteAdSet = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to delete AdSet "${name}"?`)) return;
+    const { error } = await supabase.from('adsets').delete().eq('id', id);
+    if (!error) fetchData();
   };
 
   // Agent Operations
@@ -577,11 +732,26 @@ export default function App() {
     const amount = parseFloat(spendAmount);
     const clicks = parseInt(spendClicks, 10);
     if (!spendDate || isNaN(amount) || isNaN(clicks)) return;
+
     const cpc = Number((amount / clicks).toFixed(2));
     const { error } = await supabase.from('daily_spend_logs').insert([{
-      date: spendDate, platform: spendPlatform, spend_amount: amount, clicks: clicks, cpc: cpc
+      date: spendDate,
+      platform: spendPlatform,
+      campaign_name: spendCampaign || null,
+      campaign_id: spendCampaignId || null,
+      spend_amount: amount,
+      clicks: clicks,
+      cpc: cpc
     }]);
-    if (!error) { setSpendAmount(''); setSpendClicks(''); setIsAddSpendModalOpen(false); fetchData(); }
+
+    if (!error) {
+      fetchData();
+      setSpendAmount('');
+      setSpendClicks('');
+      setSpendCampaign('');
+      setSpendCampaignId('');
+      setIsAddSpendModalOpen(false);
+    }
   };
 
   // Round Robin Helper
@@ -629,9 +799,19 @@ export default function App() {
     }
 
     const { error } = await supabase.from('leads').insert([{
-      customer_name: leadName, email: leadEmail, phone: leadPhone, platform: leadPlatform,
-      assigned_sales_id: assignedRep ? assignedRep.id : null, assigned_sales_name: assignedRep ? assignedRep.name : 'Unassigned',
-      status: 'New', date_added: leadCustomDate || todayStr, remark: leadRemark, campaign_name: leadCampaignName || null, ad_set: leadAdSet || null
+      customer_name: leadName,
+      email: leadEmail,
+      phone: leadPhone,
+      platform: leadPlatform,
+      assigned_sales_id: assignedRep ? assignedRep.id : null,
+      assigned_sales_name: assignedRep ? assignedRep.name : 'Unassigned',
+      status: 'New',
+      date_added: leadCustomDate || todayStr,
+      remark: leadRemark,
+      campaign_name: leadCampaignName || null,
+      campaign_id: leadCampaignId || null,
+      ad_set: leadAdSet || null,
+      adset_id: leadAdSetId || null
     }]);
 
     if (!error) {
@@ -640,7 +820,18 @@ export default function App() {
           leadName, leadPhone, assignedTo: assignedRep.name, agentEmail: assignedRep.email || 'crm@flowbee.io', campaignName: leadCampaignName
         });
       }
-      setLeadName(''); setLeadPhone(''); setLeadEmail(''); setLeadRemark(''); setLeadCampaignName(''); setLeadAdSet(''); setLeadCustomDate(todayStr); setIsAddLeadModalOpen(false); fetchData();
+      setLeadName('');
+      setLeadPhone('');
+      setLeadEmail('');
+      setLeadRemark('');
+      setLeadCampaignName('');
+      setLeadAdSet('');
+      setLeadCampaignId('');
+      setLeadAdSetId('');
+      setSelectedCampaignId('');
+      setLeadCustomDate(todayStr);
+      setIsAddLeadModalOpen(false);
+      fetchData();
     }
   };
 
@@ -684,25 +875,6 @@ export default function App() {
       fetchData();
     }
   };
-
-  // Filter Scopes
-  const visibleLeads = leads.filter(l => currentUser?.role === 'sales_executive' ? l.assignedSalesId === currentUser.id : true);
-
-  const filteredLeads = visibleLeads.filter(l => {
-    const matchesSearch = l.customerName.toLowerCase().includes(searchQuery.toLowerCase()) || l.phone.includes(searchQuery);
-    const matchesPlatform = filterPlatform === 'ALL' || l.platform === filterPlatform;
-    const matchesStatus = filterStatus === 'ALL' || l.status === filterStatus;
-    const matchesCampaign = filterCampaign === 'ALL' || l.campaignName === filterCampaign;
-
-    let matchesAgent = true;
-    if (filterAgentId === 'UNASSIGNED') matchesAgent = !l.assignedSalesId;
-    else if (filterAgentId !== 'ALL') matchesAgent = l.assignedSalesId === filterAgentId;
-
-    const matchesFromDate = !leadFromDate || (l.dateAdded && l.dateAdded >= leadFromDate);
-    const matchesToDate = !leadToDate || (l.dateAdded && l.dateAdded <= leadToDate);
-
-    return matchesSearch && matchesPlatform && matchesStatus && matchesAgent && matchesCampaign && matchesFromDate && matchesToDate;
-  });
 
   const visibleActivities = activities.filter(a => {
     const parentLead = leads.find(l => l.id === a.lead_id);
@@ -843,6 +1015,12 @@ export default function App() {
 
             {currentUser.role === 'admin' && (
               <>
+                {/* 📢 CAMPAIGNS & ADSETS MASTER TAB */}
+                <button onClick={() => changeTab('campaigns')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-xl transition ${activeTab === 'campaigns' ? 'bg-blue-600 text-white font-semibold' : 'hover:bg-slate-800 text-slate-400'}`}>
+                  <Megaphone size={20} className="shrink-0" />
+                  <span className={`${!isSidebarExpanded && 'md:hidden'}`}>Campaign Master</span>
+                </button>
+
                 <button onClick={() => changeTab('spend')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-xl transition ${activeTab === 'spend' ? 'bg-blue-600 text-white font-semibold' : 'hover:bg-slate-800 text-slate-400'}`}>
                   <DollarSign size={20} className="shrink-0" />
                   <span className={`${!isSidebarExpanded && 'md:hidden'}`}>Ad Spend</span>
@@ -1017,40 +1195,79 @@ export default function App() {
             <div className="bg-white p-3 md:p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
               <div className="flex items-center space-x-2 border rounded-xl px-3 py-2 bg-slate-50">
                 <Search size={16} className="text-slate-400 shrink-0" />
-                <input type="text" placeholder="Search Lead Name or Phone..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="bg-transparent outline-none text-xs w-full" />
+                <input
+                  type="text"
+                  placeholder="Search Lead Name or Phone..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="bg-transparent outline-none text-xs w-full"
+                />
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
+                {/* 1. Campaign Filter */}
+                <select
+                  value={filterCampaign}
+                  onChange={e => {
+                    setFilterCampaign(e.target.value);
+                    setFilterAdSet('ALL'); // Reset AdSet filter when Campaign changes
+                  }}
+                  className="border rounded-xl p-2 text-xs bg-slate-50 font-semibold text-purple-700 outline-none"
+                >
+                  <option value="ALL">📢 All Campaigns</option>
+                  {existingCampaigns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+
+                {/* 2. Dynamic AdSet Filter */}
+                <select
+                  value={filterAdSet}
+                  onChange={e => setFilterAdSet(e.target.value)}
+                  className="border rounded-xl p-2 text-xs bg-slate-50 font-semibold text-indigo-700 outline-none"
+                >
+                  <option value="ALL">🎯 All AdSets</option>
+                  {availableAdSetsForFilter.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+
+                {/* 3. Date Order Sorting */}
+                <select
+                  value={sortDateOrder}
+                  onChange={e => setSortDateOrder(e.target.value as 'desc' | 'asc')}
+                  className="border rounded-xl p-2 text-xs bg-slate-50 font-bold text-blue-700 outline-none"
+                >
+                  <option value="desc">🗓️ Newest First</option>
+                  <option value="asc">🗓️ Oldest First</option>
+                </select>
+
+                {/* 4. Sales Exec Filter */}
                 {currentUser.role === 'admin' && (
-                  <select value={filterAgentId} onChange={e => setFilterAgentId(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50 font-semibold text-blue-700">
+                  <select value={filterAgentId} onChange={e => setFilterAgentId(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50 font-semibold text-blue-700 outline-none">
                     <option value="ALL">👤 All Sales Execs</option>
                     <option value="UNASSIGNED">⚠️ Unassigned Leads</option>
                     {salesReps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 )}
 
-                <select value={filterCampaign} onChange={e => setFilterCampaign(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50 font-semibold text-purple-700">
-                  <option value="ALL">📢 All Campaigns</option>
-                  {existingCampaigns.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-
-                <select value={filterPlatform} onChange={e => setFilterPlatform(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50">
+                {/* 5. Platform Filter */}
+                <select value={filterPlatform} onChange={e => setFilterPlatform(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50 outline-none">
                   <option value="ALL">All Platforms</option>
                   {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
 
-                <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50">
+                {/* 6. Stage Filter */}
+                <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border rounded-xl p-2 text-xs bg-slate-50 outline-none">
                   <option value="ALL">All Stages</option>
                   {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
 
-                <div className="flex flex-col bg-slate-50 p-1.5 px-2 rounded-xl border">
-                  <span className="font-bold text-slate-500 text-[9px]">Added From:</span>
+                {/* 7. Date Range Picker (From) */}
+                <div className="flex flex-col bg-slate-50 p-1 px-2 rounded-xl border">
+                  <span className="font-bold text-slate-500 text-[8px]">Added From:</span>
                   <input type="date" value={leadFromDate} onChange={e => setLeadFromDate(e.target.value)} className="bg-transparent font-semibold text-blue-600 text-xs" />
                 </div>
 
-                <div className="flex flex-col bg-slate-50 p-1.5 px-2 rounded-xl border">
-                  <span className="font-bold text-slate-500 text-[9px]">Added To:</span>
+                {/* 8. Date Range Picker (To) */}
+                <div className="flex flex-col bg-slate-50 p-1 px-2 rounded-xl border">
+                  <span className="font-bold text-slate-500 text-[8px]">Added To:</span>
                   <input type="date" value={leadToDate} onChange={e => setLeadToDate(e.target.value)} className="bg-transparent font-semibold text-blue-600 text-xs" />
                 </div>
               </div>
@@ -1182,48 +1399,265 @@ export default function App() {
           </div>
         )}
 
-        {/* 💸 DAILY AD SPEND TAB */}
-        {activeTab === 'spend' && currentUser.role === 'admin' && (
-          <div className="space-y-4 md:space-y-6">
-            <div className="flex justify-between items-center">
+        {/* 📢 CAMPAIGNS & ADSETS MASTER TAB */}
+        {activeTab === 'campaigns' && currentUser.role === 'admin' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
               <div>
-                <h2 className="text-xl md:text-2xl font-bold text-slate-900">Daily Ad Spend & CPL Tracker</h2>
-                <p className="text-xs text-slate-500">Track expenditures, clicks, and average cost per lead</p>
+                <h2 className="text-xl md:text-2xl font-bold text-slate-900">Campaigns & AdSets Master</h2>
+                <p className="text-xs text-slate-500">Create campaigns, add adsets under each campaign, and link Meta IDs</p>
               </div>
-              <button onClick={() => setIsAddSpendModalOpen(true)} className="flex items-center space-x-1.5 bg-emerald-600 text-white font-semibold px-3.5 py-2 rounded-xl text-xs"><PlusCircle size={16} /> <span>+ Log Spend</span></button>
+              <button
+                onClick={() => setIsAddCampaignModalOpen(true)}
+                className="flex items-center space-x-1.5 bg-purple-600 text-white font-semibold px-4 py-2.5 rounded-xl text-xs hover:bg-purple-700 shadow-md transition"
+              >
+                <FolderPlus size={16} /> <span>+ New Campaign</span>
+              </button>
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
-              <table className="w-full text-left text-xs md:text-sm">
-                <thead className="bg-slate-50 border-b text-slate-500 font-semibold">
-                  <tr>
-                    <th className="p-3.5">Date</th>
-                    <th className="p-3.5">Platform</th>
-                    <th className="p-3.5">Amount (₹)</th>
-                    <th className="p-3.5">Clicks</th>
-                    <th className="p-3.5">CPC (₹)</th>
-                    <th className="p-3.5 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredSpendLogs.map(s => (
-                    <tr key={s.id}>
-                      <td className="p-3.5 font-medium text-slate-700">{s.date}</td>
-                      <td className="p-3.5">{s.platform}</td>
-                      <td className="p-3.5 font-bold text-slate-900">₹{s.spendAmount.toLocaleString('en-IN')}</td>
-                      <td className="p-3.5">{s.clicks}</td>
-                      <td className="p-3.5 font-bold text-emerald-600">₹{s.cpc}</td>
-                      <td className="p-3.5 text-right">
-                        <button onClick={() => setEditingSpend(s)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={15} /></button>
-                        <button onClick={() => handleDeleteSpend(s.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 size={15} /></button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {campaignsList.length === 0 ? (
+              <div className="bg-white rounded-2xl p-8 border text-center space-y-2">
+                <Megaphone size={36} className="mx-auto text-slate-300" />
+                <h3 className="font-bold text-slate-700 text-sm">No Master Campaigns Created Yet</h3>
+                <p className="text-xs text-slate-400">Click "+ New Campaign" above to create your first marketing campaign.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {campaignsList.map(camp => {
+                  const campaignAdSets = adSetsList.filter(a => a.campaignId === camp.id);
+                  const campaignLeadsCount = leads.filter(l => l.campaignName === camp.name).length;
+
+                  return (
+                    <div key={camp.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 md:p-5 space-y-4">
+                      {/* CAMPAIGN HEADER */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center space-x-2">
+                            <span className="bg-purple-100 text-purple-800 text-[10px] font-bold px-2.5 py-0.5 rounded-md border border-purple-200">{camp.platform}</span>
+                            <h3 className="text-base font-black text-slate-900">{camp.name}</h3>
+                          </div>
+                          <div className="flex items-center space-x-3 text-xs text-slate-500">
+                            {camp.metaCampaignId && <span>Meta Campaign ID: <strong className="text-purple-700 bg-purple-50 font-mono px-1.5 py-0.5 rounded">{camp.metaCampaignId}</strong></span>}
+                            <span>Leads Linked: <strong className="text-blue-600">{campaignLeadsCount}</strong></span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => {
+                              setSelectedParentCampaignForAdSet(camp);
+                              setIsAddAdSetModalOpen(true);
+                            }}
+                            className="flex items-center space-x-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold px-3 py-1.5 rounded-xl text-xs transition border border-indigo-200"
+                          >
+                            <Plus size={14} /> <span>Add AdSet</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCampaign(camp.id, camp.name)}
+                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* ADSETS LIST UNDER THIS CAMPAIGN */}
+                      <div className="space-y-2">
+                        <h4 className="text-[11px] font-bold text-slate-500 uppercase flex items-center space-x-1">
+                          <Layers size={13} className="text-indigo-600" />
+                          <span>AdSets inside "{camp.name}" ({campaignAdSets.length})</span>
+                        </h4>
+
+                        {campaignAdSets.length === 0 ? (
+                          <div className="bg-slate-50 p-3 rounded-xl border border-dashed text-slate-400 text-xs text-center">
+                            No AdSets added under this campaign yet. Click "+ Add AdSet" to create one.
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                            {campaignAdSets.map(adset => (
+                              <div key={adset.id} className="bg-slate-50 border p-3 rounded-xl flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                  <span className="font-bold text-slate-800 text-xs block">{adset.name}</span>
+                                  {adset.metaAdSetId ? (
+                                    <span className="text-[10px] text-indigo-600 font-mono block">ID: {adset.metaAdSetId}</span>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-400 block">No ID set</span>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={() => handleDeleteAdSet(adset.id, adset.name)}
+                                  className="text-slate-400 hover:text-rose-600 p-1"
+                                >
+                                  <X size={14} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
+
+        {/* 💸 DAILY AD SPEND TAB */}
+        {activeTab === 'spend' && currentUser.role === 'admin' && (() => {
+          const filteredSpendLogs = spendLogs.filter(s => {
+            const matchesFrom = !spendFromDate || s.date >= spendFromDate;
+            const matchesTo = !spendToDate || s.date <= spendToDate;
+            const matchesPlatform = spendPlatformFilter === 'ALL' || s.platform === spendPlatformFilter;
+            const matchesCampaign = spendCampaignSelect === 'ALL' || s.campaignName === spendCampaignSelect;
+            return matchesFrom && matchesTo && matchesPlatform && matchesCampaign;
+          });
+
+          const totalSpendFiltered = filteredSpendLogs.reduce((acc, curr) => acc + curr.spendAmount, 0);
+          const totalClicksFiltered = filteredSpendLogs.reduce((acc, curr) => acc + curr.clicks, 0);
+
+          const campaignSpendSummary: Record<string, number> = {};
+          filteredSpendLogs.forEach(s => {
+            const camp = s.campaignName || 'General';
+            campaignSpendSummary[camp] = (campaignSpendSummary[camp] || 0) + s.spendAmount;
+          });
+
+          return (
+            <div className="space-y-4 md:space-y-6">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-xl md:text-2xl font-bold text-slate-900">Daily Ad Spend & Campaign Tracker</h2>
+                  <p className="text-xs text-slate-500">Track expenditures, clicks, and CPL by campaign</p>
+                </div>
+                <button onClick={() => setIsAddSpendModalOpen(true)} className="flex items-center space-x-1.5 bg-emerald-600 text-white font-semibold px-3.5 py-2 rounded-xl text-xs hover:bg-emerald-700 shadow-sm transition">
+                  <PlusCircle size={16} /> <span>+ Log Spend</span>
+                </button>
+              </div>
+
+              {/* FILTER BAR FOR AD SPEND */}
+              <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between text-xs">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 flex-1">
+                  <div className="flex flex-col bg-slate-50 p-2 rounded-xl border">
+                    <span className="font-bold text-slate-500 text-[10px]">Spend From:</span>
+                    <input type="date" value={spendFromDate} onChange={e => setSpendFromDate(e.target.value)} className="bg-transparent outline-none font-semibold text-blue-600 text-xs mt-0.5" />
+                  </div>
+
+                  <div className="flex flex-col bg-slate-50 p-2 rounded-xl border">
+                    <span className="font-bold text-slate-500 text-[10px]">Spend To:</span>
+                    <input type="date" value={spendToDate} onChange={e => setSpendToDate(e.target.value)} className="bg-transparent outline-none font-semibold text-blue-600 text-xs mt-0.5" />
+                  </div>
+
+                  <select value={spendPlatformFilter} onChange={e => setSpendPlatformFilter(e.target.value)} className="border rounded-xl p-2.5 font-semibold bg-slate-50 text-xs outline-none text-slate-700">
+                    <option value="ALL">🌐 All Platforms</option>
+                    {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+
+                  <select value={spendCampaignSelect} onChange={e => setSpendCampaignSelect(e.target.value)} className="border rounded-xl p-2.5 font-semibold bg-slate-50 text-xs outline-none text-purple-700">
+                    <option value="ALL">📢 All Campaigns</option>
+                    {existingCampaigns.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* CAMPAIGN SPEND SUMMARY CARDS */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                <h4 className="text-xs font-bold text-slate-500 uppercase flex items-center space-x-1">
+                  <Megaphone size={13} className="text-purple-600" />
+                  <span>Campaign-wise Spend Summary</span>
+                </h4>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {Object.entries(campaignSpendSummary).map(([campName, spend]) => (
+                    <div key={campName} className="bg-slate-50 p-3 rounded-xl border space-y-1">
+                      <span className="text-[11px] font-bold text-slate-700 truncate block">{campName}</span>
+                      <p className="text-base font-black text-emerald-600">₹{spend.toLocaleString('en-IN')}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* TABLE WITH AUTO-MATCHED RESULTS & CPL */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
+                <table className="w-full text-left text-xs md:text-sm">
+                  <thead className="bg-slate-50 border-b text-slate-500 font-semibold">
+                    <tr>
+                      <th className="p-3.5">Date</th>
+                      <th className="p-3.5">Platform</th>
+                      <th className="p-3.5">Campaign Name</th>
+                      <th className="p-3.5">Amount (₹)</th>
+                      <th className="p-3.5">Clicks</th>
+                      <th className="p-3.5">CPC (₹)</th>
+                      <th className="p-3.5">Results (Leads)</th> {/* 👈 Auto Matched Leads Column */}
+                      <th className="p-3.5">CPL (₹)</th>          {/* 👈 Auto Calculated CPL Column */}
+                      <th className="p-3.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredSpendLogs.map(s => {
+                      // 🎯 Dynamic Auto-Matching Logic with Leads Table
+                      const matchedLeadsCount = leads.filter(l => {
+                        const isSameDate = l.dateAdded === s.date;
+                        const isSamePlatform = l.platform === s.platform;
+                        const isSameCampaign = s.campaignName ? l.campaignName === s.campaignName : true;
+                        return isSameDate && isSamePlatform && isSameCampaign;
+                      }).length;
+
+                      const autoCPL = matchedLeadsCount > 0 
+                        ? (s.spendAmount / matchedLeadsCount).toFixed(2) 
+                        : '0.00';
+
+                      return (
+                        <tr key={s.id} className="hover:bg-slate-50/80 transition">
+                          <td className="p-3.5 font-medium text-slate-700">{s.date}</td>
+                          <td className="p-3.5"><span className="bg-slate-100 text-slate-700 text-[11px] px-2.5 py-1 rounded-lg font-bold">{s.platform}</span></td>
+                          <td className="p-3.5 font-bold text-purple-700">{s.campaignName || 'General'}</td>
+                          <td className="p-3.5 font-bold text-slate-900">₹{s.spendAmount.toLocaleString('en-IN')}</td>
+                          <td className="p-3.5 font-semibold text-slate-600">{s.clicks}</td>
+                          <td className="p-3.5 font-bold text-emerald-600">₹{s.cpc}</td>
+                          <td className="p-3.5 font-bold text-indigo-600">{matchedLeadsCount} Leads</td>
+                          <td className="p-3.5 font-bold text-blue-600">₹{autoCPL}</td>
+                          <td className="p-3.5 text-right">
+                            <button onClick={() => setEditingSpend(s)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={15} /></button>
+                            <button onClick={() => handleDeleteSpend(s.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg"><Trash2 size={15} /></button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  {/* TOTAL FOOTER ROW */}
+                  <tfoot className="bg-slate-100 border-t font-black">
+                    {(() => {
+                      const totalMatchedLeads = filteredSpendLogs.reduce((acc, currSpend) => {
+                        const count = leads.filter(l => {
+                          const isSameDate = l.dateAdded === currSpend.date;
+                          const isSamePlatform = l.platform === currSpend.platform;
+                          const isSameCampaign = currSpend.campaignName ? l.campaignName === currSpend.campaignName : true;
+                          return isSameDate && isSamePlatform && isSameCampaign;
+                        }).length;
+                        return acc + count;
+                      }, 0);
+
+                      const overallCPL = totalMatchedLeads > 0 
+                        ? (totalSpendFiltered / totalMatchedLeads).toFixed(2) 
+                        : '0.00';
+
+                      return (
+                        <tr>
+                          <td colSpan={3} className="p-3.5 text-slate-800">Filtered Total:</td>
+                          <td className="p-3.5 text-emerald-700 text-base">₹{totalSpendFiltered.toLocaleString('en-IN')}</td>
+                          <td className="p-3.5 text-blue-700">{totalClicksFiltered}</td>
+                          <td className="p-3.5"></td>
+                          <td className="p-3.5 text-indigo-700 text-base">{totalMatchedLeads} Leads</td>
+                          <td className="p-3.5 text-blue-700 font-bold">₹{overallCPL}</td>
+                          <td></td>
+                        </tr>
+                      );
+                    })()}
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* SALES TEAM TAB */}
         {activeTab === 'agents' && currentUser.role === 'admin' && (
@@ -1300,7 +1734,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* 🎯 INTERACTIVE DRILLDOWN: SELECT CAMPAIGN TO SEE ADSETS */}
+            {/* 🎯 INTERACTIVE DRILLDOWN */}
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b pb-3">
                 <h3 className="text-base font-bold text-slate-900">Interactive Campaign & AdSet Breakdown</h3>
@@ -1349,6 +1783,104 @@ export default function App() {
           </div>
         )}
 
+        {/* 📢 MODAL: CREATE CAMPAIGN */}
+        {isAddCampaignModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl p-5 max-w-md w-full space-y-4 shadow-xl">
+              <div className="flex justify-between items-center border-b pb-3">
+                <h3 className="font-bold text-slate-800 text-sm">Create Master Campaign</h3>
+                <button onClick={() => setIsAddCampaignModalOpen(false)}><X size={20} /></button>
+              </div>
+
+              <form onSubmit={handleCreateCampaign} className="space-y-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Campaign Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. CBO_LeadGen_FamilyVisa_DubaiOnly_Jul13-31"
+                    value={newCampaignName}
+                    onChange={e => setNewCampaignName(e.target.value)}
+                    className="w-full border rounded-xl p-2.5 text-xs outline-none font-semibold text-purple-700"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Meta / Ad Campaign ID</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. c:120250141134000598"
+                    value={newMetaCampaignId}
+                    onChange={e => setNewMetaCampaignId(e.target.value)}
+                    className="w-full border rounded-xl p-2.5 text-xs outline-none font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Platform</label>
+                  <select
+                    value={newCampaignPlatform}
+                    onChange={e => setNewCampaignPlatform(e.target.value as PlatformName)}
+                    className="w-full border rounded-xl p-2.5 text-xs outline-none"
+                  >
+                    {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex gap-2 pt-2 border-t">
+                  <button type="submit" className="flex-1 bg-purple-600 text-white font-semibold py-2.5 rounded-xl text-xs hover:bg-purple-700 transition">Save Campaign</button>
+                  <button type="button" onClick={() => setIsAddCampaignModalOpen(false)} className="flex-1 bg-slate-100 py-2.5 rounded-xl text-xs">Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* 📢 MODAL: ADD ADSET UNDER CAMPAIGN */}
+        {isAddAdSetModalOpen && selectedParentCampaignForAdSet && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl p-5 max-w-md w-full space-y-4 shadow-xl">
+              <div className="flex justify-between items-center border-b pb-3">
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">Add AdSet to Campaign</h3>
+                  <p className="text-xs text-purple-600 font-bold">{selectedParentCampaignForAdSet.name}</p>
+                </div>
+                <button onClick={() => setIsAddAdSetModalOpen(false)}><X size={20} /></button>
+              </div>
+
+              <form onSubmit={handleCreateAdSet} className="space-y-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">AdSet Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. DubaiExpats_Age27-55_EngUI_AutoPlacement"
+                    value={newAdSetName}
+                    onChange={e => setNewAdSetName(e.target.value)}
+                    className="w-full border rounded-xl p-2.5 text-xs outline-none font-semibold text-indigo-700"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Meta / AdSet ID</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. as:120250141134010598"
+                    value={newMetaAdSetId}
+                    onChange={e => setNewMetaAdSetId(e.target.value)}
+                    className="w-full border rounded-xl p-2.5 text-xs outline-none font-mono"
+                  />
+                </div>
+
+                <div className="flex gap-2 pt-2 border-t">
+                  <button type="submit" className="flex-1 bg-indigo-600 text-white font-semibold py-2.5 rounded-xl text-xs hover:bg-indigo-700 transition">Save AdSet</button>
+                  <button type="button" onClick={() => setIsAddAdSetModalOpen(false)} className="flex-1 bg-slate-100 py-2.5 rounded-xl text-xs">Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* MODAL: ADD LEAD */}
         {isAddLeadModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -1364,16 +1896,81 @@ export default function App() {
                 <input type="text" placeholder="Phone Number *" required value={leadPhone} onChange={e => setLeadPhone(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs outline-none" />
                 <input type="email" placeholder="Email Address" value={leadEmail} onChange={e => setLeadEmail(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs outline-none" />
 
+                {/* SMART DYNAMIC CAMPAIGN & ADSET DROPDOWNS */}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Campaign Name</label>
-                    <input type="text" list="add-campaign-suggestions" placeholder="Type or select..." value={leadCampaignName} onChange={e => setLeadCampaignName(e.target.value)} className="w-full border rounded-xl p-2 text-xs outline-none font-semibold text-purple-700" />
-                    <datalist id="add-campaign-suggestions">{existingCampaigns.map((c, i) => <option key={i} value={c} />)}</datalist>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Select Campaign</label>
+                    <select
+                      value={selectedCampaignId}
+                      onChange={e => {
+                        const campId = e.target.value;
+                        setSelectedCampaignId(campId);
+                        const campObj = campaignsList.find(c => c.id === campId);
+                        if (campObj) {
+                          setLeadCampaignName(campObj.name);
+                          setLeadCampaignId(campObj.metaCampaignId || '');
+                        } else {
+                          setLeadCampaignName('');
+                          setLeadCampaignId('');
+                        }
+                        setLeadAdSet(''); 
+                        setLeadAdSetId('');
+                      }}
+                      className="w-full border rounded-xl p-2 text-xs font-semibold text-purple-700 outline-none"
+                    >
+                      <option value="">-- Choose Campaign --</option>
+                      {campaignsList.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Select AdSet</label>
+                    <select
+                      value={leadAdSet}
+                      disabled={!selectedCampaignId}
+                      onChange={e => {
+                        const adSetName = e.target.value;
+                        setLeadAdSet(adSetName);
+                        const adSetObj = adSetsList.find(a => a.name === adSetName && a.campaignId === selectedCampaignId);
+                        if (adSetObj) {
+                          setLeadAdSetId(adSetObj.metaAdSetId || '');
+                        }
+                      }}
+                      className="w-full border rounded-xl p-2 text-xs font-semibold text-purple-700 outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      <option value="">-- Choose AdSet --</option>
+                      {adSetsList
+                        .filter(a => a.campaignId === selectedCampaignId)
+                        .map(a => (
+                          <option key={a.id} value={a.name}>{a.name}</option>
+                        ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* CAMPAIGN ID & ADSET ID READONLY DISPLAY / INPUT */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Campaign ID</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. c:120250141" 
+                      value={leadCampaignId} 
+                      onChange={e => setLeadCampaignId(e.target.value)} 
+                      className="w-full border rounded-xl p-2 text-xs outline-none bg-slate-50 font-mono" 
+                    />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Ad Set</label>
-                    <input type="text" list="add-adset-suggestions" placeholder="Type or select..." value={leadAdSet} onChange={e => setLeadAdSet(e.target.value)} className="w-full border rounded-xl p-2 text-xs outline-none font-semibold text-indigo-700" />
-                    <datalist id="add-adset-suggestions">{existingAdSets.map((a, i) => <option key={i} value={a} />)}</datalist>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">AdSet ID</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. as:120250141" 
+                      value={leadAdSetId} 
+                      onChange={e => setLeadAdSetId(e.target.value)} 
+                      className="w-full border rounded-xl p-2 text-xs outline-none bg-slate-50 font-mono" 
+                    />
                   </div>
                 </div>
 
@@ -1409,16 +2006,48 @@ export default function App() {
                 <input type="text" required value={editingLead.phone} onChange={e => setEditingLead({ ...editingLead, phone: e.target.value })} className="w-full border rounded-xl p-2.5 text-xs outline-none" />
                 <input type="email" value={editingLead.email || ''} onChange={e => setEditingLead({ ...editingLead, email: e.target.value })} className="w-full border rounded-xl p-2.5 text-xs outline-none" />
 
+                {/* 🌟 DYNAMIC CAMPAIGN & ADSET SELECTOR FOR EDIT MODAL */}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Campaign Name</label>
-                    <input type="text" list="edit-campaign-suggestions" value={editingLead.campaignName || ''} onChange={e => setEditingLead({ ...editingLead, campaignName: e.target.value })} className="w-full border rounded-xl p-2 text-xs outline-none font-semibold text-purple-700" />
-                    <datalist id="edit-campaign-suggestions">{existingCampaigns.map((c, i) => <option key={i} value={c} />)}</datalist>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Select Campaign</label>
+                    <select
+                      value={campaignsList.find(c => c.name === editingLead.campaignName)?.id || ''}
+                      onChange={e => {
+                        const selectedCampId = e.target.value;
+                        const selectedCamp = campaignsList.find(c => c.id === selectedCampId);
+                        setEditingLead({
+                          ...editingLead,
+                          campaignName: selectedCamp ? selectedCamp.name : '',
+                          adSet: '' // Reset AdSet when Campaign changes
+                        });
+                      }}
+                      className="w-full border rounded-xl p-2 text-xs font-semibold text-purple-700 outline-none bg-white"
+                    >
+                      <option value="">-- Choose Campaign --</option>
+                      {campaignsList.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
                   </div>
+
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Ad Set</label>
-                    <input type="text" list="edit-adset-suggestions" value={editingLead.adSet || ''} onChange={e => setEditingLead({ ...editingLead, adSet: e.target.value })} className="w-full border rounded-xl p-2 text-xs outline-none font-semibold text-indigo-700" />
-                    <datalist id="edit-adset-suggestions">{existingAdSets.map((a, i) => <option key={i} value={a} />)}</datalist>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Select AdSet</label>
+                    <select
+                      value={editingLead.adSet || ''}
+                      onChange={e => setEditingLead({ ...editingLead, adSet: e.target.value })}
+                      className="w-full border rounded-xl p-2 text-xs font-semibold text-indigo-700 outline-none bg-white"
+                    >
+                      <option value="">-- Choose AdSet --</option>
+                      {(() => {
+                        const currentCamp = campaignsList.find(c => c.name === editingLead.campaignName);
+                        if (!currentCamp) return null;
+                        return adSetsList
+                          .filter(a => a.campaignId === currentCamp.id)
+                          .map(a => (
+                            <option key={a.id} value={a.name}>{a.name}</option>
+                          ));
+                      })()}
+                    </select>
                   </div>
                 </div>
 
@@ -1584,9 +2213,47 @@ export default function App() {
 
               <form onSubmit={handleAddSpend} className="space-y-3">
                 <input type="date" required value={spendDate} onChange={e => setSpendDate(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs font-semibold text-blue-600" />
+
                 <select value={spendPlatform} onChange={e => setSpendPlatform(e.target.value as PlatformName)} className="w-full border rounded-xl p-2.5 text-xs outline-none">
                   {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
+
+                {/* 📢 CAMPAIGN SELECT DROPDOWN */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Select Campaign</label>
+                  <select
+                    value={spendCampaign}
+                    onChange={e => {
+                      const selectedName = e.target.value;
+                      setSpendCampaign(selectedName);
+                      const campObj = campaignsList.find(c => c.name === selectedName);
+                      if (campObj) {
+                        setSpendCampaignId(campObj.metaCampaignId || '');
+                      } else {
+                        setSpendCampaignId('');
+                      }
+                    }}
+                    className="w-full border rounded-xl p-2.5 text-xs font-semibold text-purple-700 outline-none"
+                  >
+                    <option value="">-- Select Campaign --</option>
+                    {campaignsList.map(c => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* CAMPAIGN ID FIELD */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Campaign ID</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. c:120250141" 
+                    value={spendCampaignId} 
+                    onChange={e => setSpendCampaignId(e.target.value)} 
+                    className="w-full border rounded-xl p-2.5 text-xs outline-none bg-slate-50 font-mono" 
+                  />
+                </div>
+
                 <input type="number" placeholder="Spend Amount (₹ INR) *" required value={spendAmount} onChange={e => setSpendAmount(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs outline-none" />
                 <input type="number" placeholder="Clicks Received *" required value={spendClicks} onChange={e => setSpendClicks(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs outline-none" />
 

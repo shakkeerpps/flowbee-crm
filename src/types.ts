@@ -24,6 +24,7 @@ export interface Lead {
   campaignId?: string;       // Dynamic ID from Meta / Google Webhooks
   source?: string;           // e.g. "cpc", "social", "whatsapp_ad"
   adSet?: string;            // e.g. "UAE_Business_Owners_30-50"
+  adSetId?: string;     // 👈 Add this
   adId?: string;             // Specific Ad creative identifier
   landingPageUrl?: string;   // URL where lead was captured
 }
@@ -33,9 +34,11 @@ export interface DailySpendLog {
   date: string;
   platform: PlatformName;
   campaignName?: string;     // 🎯 Optional: Track spend per specific campaign
+  campaignId?: string; // 👈 Add this
   spendAmount: number;
   clicks: number;
   cpc?: number;
+  results?: number; // 👈 Leads count / Results
 }
 
 export interface CampaignTarget {
@@ -45,4 +48,21 @@ export interface CampaignTarget {
   targetBudget: number;
   fromDate?: string;
   toDate?: string;
+}
+
+
+export interface Campaign {
+  id: string;
+  name: string;
+  platform: PlatformName;
+  metaCampaignId?: string;
+  status: 'ACTIVE' | 'PAUSED';
+}
+
+export interface AdSet {
+  id: string;
+  campaignId: string;
+  name: string;
+  metaAdSetId?: string;
+  status: 'ACTIVE' | 'PAUSED';
 }
