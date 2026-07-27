@@ -128,19 +128,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       </div>
     `;
 
-    // Send Email to Admin/Executive Email
+    // 📩 MULTIPLE RECIPIENT EMAILS LIST
+    const recipientEmails = 'vertexsolutionsptb@gmail.com, rafeekfazili@gmail.com, salesgbc2026@gmail.com, crm@flowbee.io';
+
+    // Send Email to Executive Recipients
     const emailRes = await fetch(`${req.headers.origin || 'https://' + req.headers.host}/api/send-email`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         eventType: 'EXECUTIVE_REPORT',
-        agentEmail: 'crm@flowbee.io', // 📩 Ningalude Executive/Admin email
+        agentEmail: recipientEmails,
         subject: `📊 Executive Summary: ${reportTitle}`,
         html: htmlEmail
       })
     });
 
-    return res.status(200).json({ success: true, message: `${type} Executive report dispatched!` });
+    return res.status(200).json({ success: true, message: `${type} Executive report dispatched to all recipients!` });
 
   } catch (error: any) {
     console.error('Cron Execution Error:', error);
