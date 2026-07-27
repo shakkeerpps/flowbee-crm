@@ -257,7 +257,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
         leadName: payload.leadName || 'N/A',
         leadPhone: payload.leadPhone || payload.phone || 'N/A',
         assignedTo: payload.assignedTo || payload.repName || 'Sales Agent',
-        agentEmail: payload.agentEmail || 'crm@connectgbc.com',
+        agentEmail: payload.agentEmail || 'crm@flowbee.io',
         status: payload.status,
       }),
     });
@@ -542,7 +542,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
         leadName: targetLead?.customerName,
         leadPhone: targetLead?.phone,
         assignedTo: agentName,
-        agentEmail: selectedAgent?.email || 'crm@connectgbc.com'
+        agentEmail: selectedAgent?.email || 'crm@flowbee.io'
       });
 
       fetchData();
@@ -622,7 +622,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
           leadName,
           leadPhone,
           assignedTo: assignedRep.name,
-          agentEmail: assignedRep.email || 'crm@connectgbc.com'
+          agentEmail: assignedRep.email || 'crm@flowbee.io'
         });
       }
       setLeadName('');
@@ -649,13 +649,13 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
           leadName: lead?.customerName,
           repName: lead?.assignedSalesName,
           phone: lead?.phone,
-          agentEmail: agentObj?.email || 'crm@connectgbc.com'
+          agentEmail: agentObj?.email || 'crm@flowbee.io'
         });
       } else if (newStatus === 'Closed Lost') {
         sendEmailNotification('LOST', {
           leadName: lead?.customerName,
           repName: lead?.assignedSalesName,
-          agentEmail: agentObj?.email || 'crm@connectgbc.com'
+          agentEmail: agentObj?.email || 'crm@flowbee.io'
         });
       } else {
         // ✉️ STATUS CHANGE TRIGGER
@@ -664,7 +664,7 @@ const sendEmailNotification = async (eventType: 'ASSIGN' | 'WON' | 'LOST' | 'DAI
           leadPhone: lead?.phone,
           repName: lead?.assignedSalesName,
           status: newStatus,
-          agentEmail: agentObj?.email || 'crm@connectgbc.com'
+          agentEmail: agentObj?.email || 'crm@flowbee.io'
         });
       }
       fetchData();
