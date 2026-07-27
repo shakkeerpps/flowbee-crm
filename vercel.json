@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/executive-report?type=daily",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/executive-report?type=weekly",
+      "schedule": "30 16 * * 6"
+    },
+    {
+      "path": "/api/cron/executive-report?type=monthly",
+      "schedule": "30 3 1 * *"
+    }
+  ]
+}
